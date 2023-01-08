@@ -4,16 +4,16 @@
 module Main where
 
 import Control.Applicative (Applicative (liftA2))
-import Control.Monad (zipWithM)
+import Control.Monad (when, zipWithM)
 import Data.Aeson (Object, Value (Object), decode, (.:))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Parser, parseMaybe)
 import Data.Foldable (traverse_)
 import Data.List (genericLength)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Set qualified as Set
-import Data.Text as T (Text, lines, pack, stripSuffix)
+import Data.Text as T (Text, dropWhileEnd, init, lines, pack)
 import Data.Text.IO as TIO (hPutStrLn, putStr, putStrLn, readFile)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Network.HTTP.Req
@@ -37,6 +37,7 @@ import Params
     cmdLineParser,
   )
 import System.Directory (doesFileExist)
+import System.Exit (exitFailure)
 import System.IO
   ( IOMode (WriteMode),
     hClose,
@@ -45,8 +46,12 @@ import System.IO
     stdout,
   )
 import System.Random (randomRIO)
-import TextShow (TextShow (showb), toString, toText)
-import Types (Country, InstrumentType)
+import TextShow
+  ( TextShow (showb, showt),
+    toString,
+    toText,
+  )
+import Types
 
 newtype Symbol = Symbol {symbolValue :: Text} deriving (Eq, Ord, Show)
 
@@ -121,34 +126,38 @@ data InstrumentsResponse = InstrumentsResponse
   }
   deriving (Show)
 
-parseInstrumentsResponse :: Text -> Text -> Object -> Parser InstrumentsResponse
+parseInstrumentsResponse :: Text -> Maybe Text -> Object -> Parser InstrumentsResponse
 parseInstrumentsResponse instrumentType country v = do
-  col <- v .: "instrumentsCollectionLimited"
-  case col of
+  instrumentCounts <- v .: "instrumentCounts"
+  instrumentsCollectionLimited <- v .: "instrumentsCollectionLimited"
+  case instrumentsCollectionLimited of
     (Object collection) -> do
-      cashstocks <- collection .: Key.fromText instrumentType
-      usCashstocks <- cashstocks .: Key.fromText country
-
-      countryObj <- usCashstocks .: "country"
-      cnt <- countryObj .: "instrument_count"
-
-      instrs <- usCashstocks .: "instruments"
-      let keys = Key.toText <$> KM.keys (instrs :: KM.KeyMap Object)
-      let symbols = traverse ((Symbol <$>) . T.stripSuffix ("." <> country)) keys
-
-      return $ InstrumentsResponse cnt symbols
+      instrs <- collection .: Key.fromText instrumentType
+      case country of
+        Just c -> do
+          count <- instrumentCounts .: Key.fromText (instrumentType <> "-" <> c)
+          countryObj <- instrs .: Key.fromText c
+          instruments :: KM.KeyMap Object <- countryObj .: "instruments"
+          let symbols = Just $ Symbol . stripCountry . Key.toText <$> KM.keys instruments
+          return $ InstrumentsResponse count symbols
+          where
+            stripCountry = T.init . T.dropWhileEnd (/= '.')
+        Nothing -> do
+          count <- instrumentCounts .: Key.fromText instrumentType
+          let symbols = Just $ Symbol . Key.toText <$> KM.keys instrs
+          return $ InstrumentsResponse count symbols
     _ -> return $ InstrumentsResponse Nothing Nothing
 
-getQueryParams :: Text -> Text -> Int -> Int -> Option scheme
+getQueryParams :: Text -> Maybe Text -> Int -> Int -> Option scheme
 getQueryParams instrumentType country page mysteryVal =
   mconcat
     [ "instrumentTypeSlug" =: instrumentType,
       "page" =: page,
-      "country" =: country,
       "_" =: mysteryVal
     ]
+    <> maybe mempty ("country" =:) country
 
-downloadPage :: Text -> Text -> Int -> Int -> IO InstrumentsResponse
+downloadPage :: Text -> Maybe Text -> Int -> Int -> IO InstrumentsResponse
 downloadPage instrumentType country page mysteryVal = runReq defaultHttpConfig $ do
   r <- req GET url NoReqBody lbsResponse (headers <> getQueryParams instrumentType country page mysteryVal)
   let response = decode (responseBody r)
@@ -160,42 +169,52 @@ downloadPage instrumentType country page mysteryVal = runReq defaultHttpConfig $
         _ -> error "Parsing response failed."
     _ -> error "Decoding response JSON failed."
 
-downloadPageAndPrint :: Text -> Text -> Int -> Int -> Int -> IO InstrumentsResponse
+downloadPageAndPrint :: Text -> Maybe Text -> Int -> Int -> Int -> IO InstrumentsResponse
 downloadPageAndPrint instrumentType country total page mysteryVal = do
   TIO.putStr $ "Downloading page " <> (toText . showb) page <> "/" <> (toText . showb) total <> "...\r"
   hFlush stdout
   downloadPage instrumentType country page mysteryVal
 
-fetchSymbols :: InstrumentType -> Country -> IO (Maybe (Set.Set Symbol))
+fetchSymbols :: InstrumentType -> Maybe Country -> IO (Maybe (Set.Set Symbol))
 fetchSymbols instrumentType country = do
   mysteryValue <- underscore
-  let it = toText $ showb instrumentType
-  let c = toText $ showb country
-
+  let it = showt instrumentType
+  let c = showt <$> country
   TIO.putStr "Downloading page 1...\r"
   response <- downloadPage it c 1 mysteryValue
   case response of
     InstrumentsResponse (Just total) (Just syms) -> do
-      TIO.putStrLn $ (toText . showb) total <> " " <> c <> " " <> it <> " symbols found."
+      case c of
+        Just countryName -> TIO.putStrLn $ showt total <> " " <> countryName <> " " <> it <> " symbols found."
+        Nothing -> TIO.putStrLn $ showt total <> " " <> it <> " symbols found."
       let lst = ceiling ((realToFrac total :: Double) / genericLength syms)
       responses <- zipWithM (downloadPageAndPrint it c lst) [2 .. lst] [mysteryValue + 1 ..]
       return $ Set.fromList <$> Just syms <> (concat <$> traverse symbols responses)
     InstrumentsResponse _ _ -> error "First page download failed."
 
-genFilename :: InstrumentType -> Country -> FilePath
-genFilename it c = toString $ "xtb_" <> showb it <> "_" <> showb c <> ".txt"
+genFilename :: InstrumentType -> Maybe Country -> FilePath
+genFilename it c = toString $ "xtb_" <> showb it <> maybe "" (("_" <>) . showb) c <> ".txt"
 
 work :: Params -> IO ()
 work params = do
   let it = instrumentType params
   let c = country params
+
+  if it `elem` [Cashstocks, Shares]
+    then when (isNothing c) $ do
+      TIO.putStrLn $ showt it <> " instrument type requires a country."
+      exitFailure
+    else when (isJust c) $ do
+      TIO.putStrLn $ showt it <> " instrument type doesn't require a country."
+      exitFailure
+
   symbols <- fetchSymbols it c
   TIO.putStrLn ""
   case symbols of
     Just syms -> do
       let filename = fromMaybe (genFilename it c) (outputFile params)
       updateSymbols syms filename
-    Nothing -> TIO.putStrLn "Download failed."
+    Nothing -> TIO.putStrLn "Download failed." >> exitFailure
 
 main :: IO ()
 main = cmdLineParser >>= work

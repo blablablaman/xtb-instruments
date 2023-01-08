@@ -13,6 +13,7 @@ import Options.Applicative
     long,
     maybeReader,
     metavar,
+    option,
     optional,
     progDesc,
     short,
@@ -23,7 +24,7 @@ import Types
 
 data Params = Params
   { instrumentType :: InstrumentType,
-    country :: Country,
+    country :: Maybe Country,
     outputFile :: Maybe FilePath
   }
 
@@ -33,12 +34,18 @@ mkParams =
     <$> argument
       (maybeReader (`lookup` instrumentTypes))
       ( metavar "INSTRUMENT_TYPE"
-          <> help "Instrument type. One of: forex, indices, cashstocks, commodities, shares, cryptocurrencies, etfcfd, etfs."
+          <> help
+            "Instrument type. One of: forex, indices, cashstocks, commodities, shares, cryptocurrencies, etfcfd, etfs."
       )
-    <*> argument
-      (maybeReader (`lookup` countries))
-      ( metavar "COUNTRY"
-          <> help "Country. One of: us, pl, uk, ukint, cz, fr, de, it, pt, es, be, nl, ch, dk, se, fi, no."
+    <*> optional
+      ( option
+          (maybeReader (`lookup` countries))
+          ( long "country"
+              <> short 'c'
+              <> metavar "COUNTRY"
+              <> help
+                "Country - necessary for cashstocks and shares instrument types. One of: us, pl, uk, ukint, cz, fr, de, it, pt, es, be, nl, ch, dk, se, fi, no."
+          )
       )
     <*> optional
       ( strOption
