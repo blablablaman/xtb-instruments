@@ -3,8 +3,7 @@
 
 module Main where
 
-import Control.Applicative (Applicative (liftA2))
-import Control.Monad (when, zipWithM)
+import Control.Monad (when)
 import Data.Aeson (Object, Value (Object), decode, (.:))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
@@ -15,7 +14,6 @@ import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Set qualified as Set
 import Data.Text as T (Text, dropWhileEnd, init, lines, pack)
 import Data.Text.IO as TIO (hPutStrLn, putStr, putStrLn, readFile)
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Network.HTTP.Req
   ( GET (GET),
     NoReqBody (NoReqBody),
@@ -45,7 +43,6 @@ import System.IO
     openFile,
     stdout,
   )
-import System.Random (randomRIO)
 import TextShow (TextShow (showb, showt), toString)
 import Types
 
@@ -53,19 +50,6 @@ newtype Symbol = Symbol {symbolValue :: Text} deriving (Eq, Ord, Show)
 
 url :: Url 'Https
 url = https "www.xtb.com" /: "api" /: "pl" /: "instruments" /: "get"
-
-headers :: Option scheme
-headers =
-  mconcat
-    [ header
-        "Referer"
-        "https://www.xtb.com/pl/oferta/informacje-o-rachunku/specyfikacja-instrumentow",
-      header
-        "User-Agent"
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, \
-        \like Gecko) Chrome/108.0.0.0 Safari/537.36",
-      header "X-Requested-With" "XMLHttpRequest"
-    ]
 
 loadSymbols :: FilePath -> IO (Set.Set Symbol)
 loadSymbols fpath = do
@@ -111,16 +95,6 @@ printDiff added removed = do
       TIO.putStrLn "Symbols removed:"
       traverse_ (TIO.putStrLn . symbolValue) removed
 
--- Przy pierwszym żądaniu, w parametrze _ idzie coś co wygląda na czas
--- załadowania strony w ms, który przy każdym kolejnym jest zwiększany o 1 ms.
--- Tutaj ten czas po prostu zmyślam, a obyłoby się i bez tego, bo jeżeli się
--- tego nie wyśle, to API i tak działa tak samo.
-underscore :: IO Int
-underscore = liftA2 (-) millis rndval
-  where
-    millis = round . (1000 *) <$> getPOSIXTime
-    rndval = randomRIO (2500, 10000)
-
 data InstrumentsResponse = InstrumentsResponse
   { totalSymbols :: Maybe Int,
     symbols :: Maybe [Symbol]
@@ -149,24 +123,19 @@ parseInstrumentsResponse instrumentType country v = do
           return $ InstrumentsResponse count symbols
     _ -> return $ InstrumentsResponse Nothing Nothing
 
-getQueryParams :: Text -> Maybe Text -> Int -> Int -> Option scheme
-getQueryParams instrumentType country page mysteryVal =
-  mconcat
-    [ "instrumentTypeSlug" =: instrumentType,
-      "page" =: page,
-      "_" =: mysteryVal
-    ]
+getReqOptions :: Text -> Maybe Text -> Int -> Option scheme
+getReqOptions instrumentType country page =
+  header
+    "User-Agent"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+    \(KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+    <> ("instrumentTypeSlug" =: instrumentType)
+    <> ("page" =: page)
     <> maybe mempty ("country" =:) country
 
-downloadPage :: Text -> Maybe Text -> Int -> Int -> IO InstrumentsResponse
-downloadPage instrumentType country page mysteryVal = runReq defaultHttpConfig $ do
-  r <-
-    req
-      GET
-      url
-      NoReqBody
-      lbsResponse
-      (headers <> getQueryParams instrumentType country page mysteryVal)
+downloadPage :: Text -> Maybe Text -> Int -> IO InstrumentsResponse
+downloadPage instrumentType country page = runReq defaultHttpConfig $ do
+  r <- req GET url NoReqBody lbsResponse (getReqOptions instrumentType country page)
   let response = decode (responseBody r)
   case response of
     (Just resp) -> do
@@ -176,19 +145,18 @@ downloadPage instrumentType country page mysteryVal = runReq defaultHttpConfig $
         _ -> error "Parsing response failed."
     _ -> error "Decoding response JSON failed."
 
-downloadPageAndPrint :: Text -> Maybe Text -> Int -> Int -> Int -> IO InstrumentsResponse
-downloadPageAndPrint instrumentType country total page mysteryVal = do
+downloadPageAndPrint :: Text -> Maybe Text -> Int -> Int -> IO InstrumentsResponse
+downloadPageAndPrint instrumentType country total page = do
   TIO.putStr $ "Downloading page " <> showt page <> "/" <> showt total <> "...\r"
   hFlush stdout
-  downloadPage instrumentType country page mysteryVal
+  downloadPage instrumentType country page
 
 fetchSymbols :: InstrumentType -> Maybe Country -> IO (Maybe (Set.Set Symbol))
 fetchSymbols instrumentType country = do
-  mysteryValue <- underscore
   let it = showt instrumentType
   let c = showt <$> country
   TIO.putStr "Downloading page 1...\r"
-  response <- downloadPage it c 1 mysteryValue
+  response <- downloadPage it c 1
   case response of
     InstrumentsResponse (Just total) (Just syms) -> do
       case c of
@@ -196,7 +164,7 @@ fetchSymbols instrumentType country = do
           TIO.putStrLn $ showt total <> " " <> countryName <> " " <> it <> " symbols found."
         Nothing -> TIO.putStrLn $ showt total <> " " <> it <> " symbols found."
       let lst = ceiling ((realToFrac total :: Double) / genericLength syms)
-      responses <- zipWithM (downloadPageAndPrint it c lst) [2 .. lst] [mysteryValue + 1 ..]
+      responses <- traverse (downloadPageAndPrint it c lst) [2 .. lst]
       return $ Set.fromList <$> Just syms <> (concat <$> traverse symbols responses)
     InstrumentsResponse _ _ -> error "First page download failed."
 
