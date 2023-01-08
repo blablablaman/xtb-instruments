@@ -46,11 +46,7 @@ import System.IO
     stdout,
   )
 import System.Random (randomRIO)
-import TextShow
-  ( TextShow (showb, showt),
-    toString,
-    toText,
-  )
+import TextShow (TextShow (showb, showt), toString)
 import Types
 
 newtype Symbol = Symbol {symbolValue :: Text} deriving (Eq, Ord, Show)
@@ -171,7 +167,7 @@ downloadPage instrumentType country page mysteryVal = runReq defaultHttpConfig $
 
 downloadPageAndPrint :: Text -> Maybe Text -> Int -> Int -> Int -> IO InstrumentsResponse
 downloadPageAndPrint instrumentType country total page mysteryVal = do
-  TIO.putStr $ "Downloading page " <> (toText . showb) page <> "/" <> (toText . showb) total <> "...\r"
+  TIO.putStr $ "Downloading page " <> showt page <> "/" <> showt total <> "...\r"
   hFlush stdout
   downloadPage instrumentType country page mysteryVal
 
