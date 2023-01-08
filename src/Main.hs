@@ -57,8 +57,13 @@ url = https "www.xtb.com" /: "api" /: "pl" /: "instruments" /: "get"
 headers :: Option scheme
 headers =
   mconcat
-    [ header "Referer" "https://www.xtb.com/pl/oferta/informacje-o-rachunku/specyfikacja-instrumentow",
-      header "User-Agent" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+    [ header
+        "Referer"
+        "https://www.xtb.com/pl/oferta/informacje-o-rachunku/specyfikacja-instrumentow",
+      header
+        "User-Agent"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, \
+        \like Gecko) Chrome/108.0.0.0 Safari/537.36",
       header "X-Requested-With" "XMLHttpRequest"
     ]
 
@@ -155,7 +160,13 @@ getQueryParams instrumentType country page mysteryVal =
 
 downloadPage :: Text -> Maybe Text -> Int -> Int -> IO InstrumentsResponse
 downloadPage instrumentType country page mysteryVal = runReq defaultHttpConfig $ do
-  r <- req GET url NoReqBody lbsResponse (headers <> getQueryParams instrumentType country page mysteryVal)
+  r <-
+    req
+      GET
+      url
+      NoReqBody
+      lbsResponse
+      (headers <> getQueryParams instrumentType country page mysteryVal)
   let response = decode (responseBody r)
   case response of
     (Just resp) -> do
@@ -181,7 +192,8 @@ fetchSymbols instrumentType country = do
   case response of
     InstrumentsResponse (Just total) (Just syms) -> do
       case c of
-        Just countryName -> TIO.putStrLn $ showt total <> " " <> countryName <> " " <> it <> " symbols found."
+        Just countryName ->
+          TIO.putStrLn $ showt total <> " " <> countryName <> " " <> it <> " symbols found."
         Nothing -> TIO.putStrLn $ showt total <> " " <> it <> " symbols found."
       let lst = ceiling ((realToFrac total :: Double) / genericLength syms)
       responses <- zipWithM (downloadPageAndPrint it c lst) [2 .. lst] [mysteryValue + 1 ..]

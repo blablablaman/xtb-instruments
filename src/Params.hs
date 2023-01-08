@@ -35,7 +35,8 @@ mkParams =
       (maybeReader (`lookup` instrumentTypes))
       ( metavar "INSTRUMENT_TYPE"
           <> help
-            "Instrument type. One of: forex, indices, cashstocks, commodities, shares, cryptocurrencies, etfcfd, etfs."
+            "Instrument type. One of: forex, indices, cashstocks, \
+            \commodities, shares, cryptocurrencies, etfcfd, etfs."
       )
     <*> optional
       ( option
@@ -44,7 +45,8 @@ mkParams =
               <> short 'c'
               <> metavar "COUNTRY"
               <> help
-                "Country - necessary for cashstocks and shares instrument types. One of: us, pl, uk, ukint, cz, fr, de, it, pt, es, be, nl, ch, dk, se, fi, no."
+                "Country - necessary for cashstocks and shares instrument types. One of: \
+                \us, pl, uk, ukint, cz, fr, de, it, pt, es, be, nl, ch, dk, se, fi, no."
           )
       )
     <*> optional
