@@ -25,3 +25,4 @@ executable xtb-instruments
       , aeson
       , req
     default-language: GHC2021
+    default-extensions: OverloadedStrings
