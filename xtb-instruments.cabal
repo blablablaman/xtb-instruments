@@ -17,7 +17,6 @@ executable xtb-instruments
       , text
       , text-show
       , bytestring
-      , time
       , directory
       , random
       , containers
