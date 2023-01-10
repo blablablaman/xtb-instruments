@@ -23,5 +23,6 @@ executable xtb-instruments
       , optparse-applicative
       , aeson
       , req
+      , mtl
     default-language: GHC2021
     default-extensions: OverloadedStrings

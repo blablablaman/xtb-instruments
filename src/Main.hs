@@ -3,6 +3,11 @@
 module Main where
 
 import Control.Monad (when)
+import Control.Monad.Reader
+  ( MonadReader (ask),
+    MonadTrans (lift),
+    ReaderT (runReaderT),
+  )
 import Data.Aeson (Object, Value (Object), decode, (.:))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
@@ -44,6 +49,8 @@ import System.IO
   )
 import TextShow (TextShow (showb, showt), toString)
 import Types
+
+type ParamsM = ReaderT Params IO
 
 newtype Symbol = Symbol {symbolValue :: Text} deriving (Eq, Ord, Show)
 
@@ -132,64 +139,72 @@ getReqOptions instrumentType country page =
     <> ("page" =: page)
     <> maybe mempty ("country" =:) country
 
-downloadPage :: Text -> Maybe Text -> Int -> IO InstrumentsResponse
-downloadPage instrumentType country page = runReq defaultHttpConfig $ do
-  r <- req GET url NoReqBody lbsResponse (getReqOptions instrumentType country page)
+downloadPage :: Int -> ParamsM InstrumentsResponse
+downloadPage page = do
+  params <- ask
+  let it = showt $ instrumentType params
+      c = showt <$> country params
+      request = req GET url NoReqBody lbsResponse (getReqOptions it c page)
+  r <- runReq defaultHttpConfig request
   let response = decode (responseBody r)
   case response of
     (Just resp) -> do
-      let parsed = parseMaybe (parseInstrumentsResponse instrumentType country) resp
+      let parsed = parseMaybe (parseInstrumentsResponse it c) resp
       case parsed of
         (Just instrumentsResponse) -> return instrumentsResponse
         _ -> error "Parsing response failed."
     _ -> error "Decoding response JSON failed."
 
-downloadPageAndPrint :: Text -> Maybe Text -> Int -> Int -> IO InstrumentsResponse
-downloadPageAndPrint instrumentType country total page = do
-  TIO.putStr $ "Downloading page " <> showt page <> "/" <> showt total <> "...\r"
-  hFlush stdout
-  downloadPage instrumentType country page
+downloadPageAndPrint :: Int -> Int -> ParamsM InstrumentsResponse
+downloadPageAndPrint total page = do
+  lift $ TIO.putStr $ "Downloading page " <> showt page <> "/" <> showt total <> "...\r"
+  lift $ hFlush stdout
+  downloadPage page
 
-fetchSymbols :: InstrumentType -> Maybe Country -> IO (Maybe (Set.Set Symbol))
-fetchSymbols instrumentType country = do
-  let it = showt instrumentType
-  let c = showt <$> country
-  TIO.putStr "Downloading page 1...\r"
-  response <- downloadPage it c 1
+fetchSymbols :: ParamsM (Maybe (Set.Set Symbol))
+fetchSymbols = do
+  params <- ask
+  let it = showt $ instrumentType params
+      c = showt <$> country params
+  lift $ TIO.putStr "Downloading page 1...\r"
+  response <- downloadPage 1
   case response of
     InstrumentsResponse (Just total) (Just syms) -> do
       case c of
         Just countryName ->
-          TIO.putStrLn $ showt total <> " " <> countryName <> " " <> it <> " symbols found."
-        Nothing -> TIO.putStrLn $ showt total <> " " <> it <> " symbols found."
+          lift $ TIO.putStrLn $ showt total <> " " <> countryName <> " " <> it <> " symbols found."
+        Nothing -> lift $ TIO.putStrLn $ showt total <> " " <> it <> " symbols found."
       let lst = ceiling ((realToFrac total :: Double) / genericLength syms)
-      responses <- traverse (downloadPageAndPrint it c lst) [2 .. lst]
+      responses <- traverse (downloadPageAndPrint lst) [2 .. lst]
       return $ Set.fromList <$> Just syms <> (concat <$> traverse symbols responses)
     InstrumentsResponse _ _ -> error "First page download failed."
 
 genFilename :: InstrumentType -> Maybe Country -> FilePath
 genFilename it c = toString $ "xtb_" <> showb it <> maybe "" (("_" <>) . showb) c <> ".txt"
 
-work :: Params -> IO ()
-work params = do
+work :: ParamsM ()
+work = do
+  params <- ask
   let it = instrumentType params
-  let c = country params
+      c = country params
 
   if it `elem` [Cashstocks, Shares]
-    then when (isNothing c) $ do
+    then when (isNothing c) $ lift $ do
       TIO.putStrLn $ showt it <> " instrument type requires a country."
       exitFailure
-    else when (isJust c) $ do
+    else when (isJust c) $ lift $ do
       TIO.putStrLn $ showt it <> " instrument type doesn't require a country."
       exitFailure
 
-  symbols <- fetchSymbols it c
-  TIO.putStrLn ""
+  symbols <- fetchSymbols
+  lift $ TIO.putStrLn ""
   case symbols of
     Just syms -> do
       let filename = fromMaybe (genFilename it c) (outputFile params)
-      updateSymbols syms filename
-    Nothing -> TIO.putStrLn "Download failed." >> exitFailure
+      lift $ updateSymbols syms filename
+    Nothing -> lift $ TIO.putStrLn "Download failed." >> exitFailure
 
 main :: IO ()
-main = cmdLineParser >>= work
+main = do
+  params <- cmdLineParser
+  runReaderT work params
