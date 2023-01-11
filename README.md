@@ -46,7 +46,7 @@ stack exec xtb-instruments -- forex -o forex.txt
 Downloading a list of Polish stocks to `xtb_cashstocks_PL.txt`:
 
 ```
-stack exec xtb-instruments -- cashstocks -c PL
+stack exec xtb-instruments -- cashstocks -c pl
 ```
 
 If the target file already exists, it will be modified to match instruments
